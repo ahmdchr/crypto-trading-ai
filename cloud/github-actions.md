@@ -46,6 +46,6 @@ git push
 gh workflow run paper-trade.yml
 ```
 
-Open the repository's **Actions** tab and wait for the manually triggered run to complete. Check that its log reports a market scan and that it committed an updated encrypted wallet. Then disable local automatic startup with `systemctl --user disable crypto-paper-bot.service`. If the run fails, leave the local bot stopped while investigating. Resume it only if you decide to abandon this cloud wallet, to avoid diverging histories.
+Open the repository's **Actions** tab and wait for the manually triggered run to complete. If the local bot already scanned this hour, the workflow will report that the cycle is complete; check the next hourly run for a new scan and wallet commit. Then disable local automatic startup with `systemctl --user disable crypto-paper-bot.service`. If the run fails, leave the local bot stopped while investigating. Resume it only if you decide to abandon this cloud wallet, to avoid diverging histories.
 
 The workflow runs at minute 17 UTC each hour. [GitHub warns](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows) that scheduled jobs can be delayed or dropped; check the Actions tab periodically. The bot's hourly cycle guard prevents duplicate scans within one hour. The encrypted wallet is committed each successful run, so the repository's size will grow over time. Keep the password and a separate backup of the latest wallet.

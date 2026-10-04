@@ -19,8 +19,14 @@ printf '%s' "$PAPER_WALLET_PASSPHRASE" | gpg --batch --yes --quiet \
   --pinentry-mode loopback --no-symkey-cache --passphrase-fd 0 \
   --output paper.sqlite3 --decrypt state/paper.sqlite3.gpg
 python3 cloud/verify-wallet.py paper.sqlite3
+cycle_before=$(python3 -c "import sqlite3; print(sqlite3.connect('paper.sqlite3').execute('SELECT last_cycle FROM account WHERE id=1').fetchone()[0])")
 python3 paper_bot.py --once --quiet --db paper.sqlite3
 python3 cloud/verify-wallet.py paper.sqlite3
+cycle_after=$(python3 -c "import sqlite3; print(sqlite3.connect('paper.sqlite3').execute('SELECT last_cycle FROM account WHERE id=1').fetchone()[0])")
+if [[ $cycle_before == "$cycle_after" ]]; then
+  echo 'Hourly paper scan was already complete; wallet unchanged'
+  exit 0
+fi
 
 printf '%s' "$PAPER_WALLET_PASSPHRASE" | gpg --batch --yes --quiet \
   --pinentry-mode loopback --no-symkey-cache --passphrase-fd 0 \
