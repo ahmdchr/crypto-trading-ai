@@ -1,0 +1,22 @@
+[Unit]
+Description=Crypto paper trader (mock money only)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=crypto-paper
+Group=crypto-paper
+WorkingDirectory=/opt/crypto-trading-ai
+StateDirectory=crypto-paper-bot
+ExecStart=/usr/bin/python3 /opt/crypto-trading-ai/paper_bot.py --db /var/lib/crypto-paper-bot/paper.sqlite3
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/crypto-paper-bot
+
+[Install]
+WantedBy=multi-user.target

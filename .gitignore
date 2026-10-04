@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3.lock
+state/
+!state/
+state/*
+!state/.gitkeep
+!state/paper.sqlite3.gpg
+.wallet-passphrase
