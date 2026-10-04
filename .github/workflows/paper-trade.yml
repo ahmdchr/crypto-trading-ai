@@ -2,7 +2,7 @@ name: Hourly paper trade
 
 on:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '17,32,47 * * * *'
   workflow_dispatch:
 
 permissions:
