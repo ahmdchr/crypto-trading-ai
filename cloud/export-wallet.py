@@ -17,6 +17,7 @@ def main():
         parser.error(f"Destination already exists: {args.destination}")
     source = sqlite3.connect(f"file:{args.db.resolve()}?mode=ro", uri=True)
     destination = sqlite3.connect(args.destination)
+    args.destination.chmod(0o600)
     try:
         source.backup(destination)
         ok = destination.execute("PRAGMA integrity_check").fetchone()[0]
