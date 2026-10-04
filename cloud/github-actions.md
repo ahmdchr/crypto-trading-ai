@@ -4,7 +4,7 @@ The [workflow](../.github/workflows/paper-trade.yml) runs one full Coinbase USD 
 
 ## Set up the repository
 
-1. Create a free [GitHub account](https://docs.github.com/en/account-and-profile/how-tos/account-management/creating-an-account-on-github) and authenticate `gh` on this computer with `gh auth login -h github.com`. Check `gh auth status` succeeds.
+1. Create a free [GitHub account](https://docs.github.com/en/account-and-profile/how-tos/account-management/creating-an-account-on-github) and authenticate `gh` on this computer with `gh auth login -h github.com`. Check `gh auth status` succeeds. The CLI also needs the `workflow` scope to push `.github/workflows/paper-trade.yml`; if GitHub rejects that file, run `gh auth refresh -h github.com -s workflow` and approve the device authorization.
 2. Create a **public** repository from this project directory. The local database is ignored by Git. For example:
 
    ```bash
