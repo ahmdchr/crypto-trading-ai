@@ -1,6 +1,6 @@
 # Run the paper bot on GitHub Actions without a payment card
 
-The [workflow](../.github/workflows/paper-trade.yml) requests full Coinbase USD spot scans at three times each hour on a standard GitHub runner. It decrypts the paper wallet, runs `paper_bot.py --once --quiet --observe-only`, then encrypts and commits the updated wallet. Observation mode closes existing paper positions at the next successful scan and records new forecasts without buying. The repository can be public because only the encrypted wallet is committed, and public workflow logs omit positions and balances. GitHub says standard runners are [free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). The bot still uses mock money and no exchange keys.
+The [workflow](../.github/workflows/paper-trade.yml) requests full Coinbase USD spot scans at three times each hour on a standard GitHub runner. It decrypts the paper wallet, runs `paper_bot.py --once --quiet --observe-only`, then encrypts and commits the updated wallet. Observation mode closes existing paper positions when valid quotes are available, retries the rest at later scans, and records new forecasts without buying. The repository can be public because only the encrypted wallet is committed, and public workflow logs omit positions and balances. GitHub says standard runners are [free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). The bot still uses mock money and no exchange keys.
 
 ## Set up the repository
 

@@ -18,8 +18,8 @@ This is a research baseline. The result depends strongly on the data, fee assump
 
 `paper_bot.py` aims to scan all eligible **Coinbase USD spot pairs** every hour. It uses the most recent completed hourly candles for model scores, selects up to five pairs, and buys with a mock cash balance. At the next scan it sells those positions and picks again. Prices come from Coinbase's public ticker. The wallet and full simulated trade history live in `paper.sqlite3`. It never connects to private account APIs and cannot place real orders. GitHub Actions scans have actually been several hours apart.
 
-The GitHub Actions wallet currently runs in observation mode: it closes its
-existing paper positions at the next successful scan and keeps recording
+The GitHub Actions wallet currently runs in observation mode: it closes existing
+paper positions when valid quotes are available and keeps recording
 forecasts without opening new positions. This avoids adding exposure while its
 one-hour signal is evaluated against the irregular GitHub scan schedule. The
 pre-change encrypted wallet is preserved in `baselines/`.
