@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 from learning import adjusted_probability, calibration_offset
 from cloud.compare_signals import replay
-from paper_bot import INTERVAL, Exchange, Quote, connect, cycle, signal
+from cloud.compare_quotes import paired_scans
+from paper_bot import INTERVAL, Exchange, Quote, connect, cycle, select_shadow_entries, signal
 from trader import Bar, net_bar_return
 
 
@@ -32,6 +33,17 @@ class CandleExchange(FakeExchange):
 class SpreadExchange(FakeExchange):
     def quote(self, product):
         return {"BTC-USD": Quote(99, 101), "ETH-USD": Quote(49, 51)}[product]
+
+
+class ChangingExchange(FakeExchange):
+    def __init__(self):
+        self.prices = {"BTC-USD": 100.0, "ETH-USD": 50.0}
+        self.unavailable = set()
+
+    def quote(self, product):
+        if product in self.unavailable:
+            raise ValueError("No fresh quote")
+        return Quote(self.prices[product], self.prices[product])
 
 
 class PaperBotTests(unittest.TestCase):
@@ -141,6 +153,62 @@ class PaperBotTests(unittest.TestCase):
         self.assertEqual(replay([hour], "cash"), (0.0, 0))
         self.assertEqual(replay([hour], "profit"), (0.0, 0))
         self.assertAlmostEqual(replay([hour], "direction")[0], -0.001)
+
+    def test_shadow_quotes_use_actual_next_available_scan_prices(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = connect(Path(directory) / "wallet.sqlite3", 1000)
+            exchange = ChangingExchange()
+            with patch("paper_bot.signal", return_value=(0.8, 1_000_000, 1_799_996_400)):
+                with patch("paper_bot.time.time", return_value=1_800_000_000):
+                    cycle(exchange, db, 0, 2, 0.1, 0.55, 10, 5, 0,
+                          observe_only=True)
+                    cycle(exchange, db, 0, 2, 0.1, 0.55, 10, 5, 0,
+                          observe_only=True)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM shadow_entries").fetchone()[0], 6)
+                exchange.prices["BTC-USD"] = 102.0
+                exchange.unavailable.add("ETH-USD")
+                with patch("paper_bot.time.time", return_value=1_800_003_600):
+                    cycle(exchange, db, 0, 2, 0.1, 0.55, 10, 5, 0,
+                          observe_only=True)
+                first_cycle = 1_800_000_000 // INTERVAL
+                btc = db.execute(
+                    "SELECT net_return FROM shadow_entries WHERE cycle_id=? "
+                    "AND strategy='direction' AND product='BTC-USD'",
+                    (first_cycle,)).fetchone()[0]
+                self.assertAlmostEqual(btc, 102 * 0.9985 / (100 * 1.0015) - 1)
+                self.assertIsNone(db.execute(
+                    "SELECT exit_time FROM shadow_entries WHERE cycle_id=? "
+                    "AND strategy='direction' AND product='ETH-USD'",
+                    (first_cycle,)).fetchone()[0])
+                exchange.unavailable.clear()
+                exchange.prices["ETH-USD"] = 49.0
+                with patch("paper_bot.time.time", return_value=1_800_007_200):
+                    cycle(exchange, db, 0, 2, 0.1, 0.55, 10, 5, 0,
+                          observe_only=True)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM trades").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM shadow_scans").fetchone()[0], 3)
+            self.assertIsNotNone(db.execute(
+                "SELECT net_return FROM shadow_entries WHERE cycle_id=? "
+                "AND strategy='profit' AND product='ETH-USD'",
+                (first_cycle,)).fetchone()[0])
+            scans = list(db.execute("SELECT * FROM shadow_scans ORDER BY cycle_id"))
+            entries = list(db.execute("SELECT * FROM shadow_entries ORDER BY cycle_id"))
+            self.assertEqual(len(paired_scans(scans, entries)), 2)
+            db.close()
+
+    def test_shadow_selection_applies_threshold_volume_and_spread(self):
+        forecasts = [
+            {"product": "BTC-USD", "bar_time": 0, "direction_probability": 0.8,
+             "profit_probability": 0.2, "dollar_volume": 1_000_000},
+            {"product": "ETH-USD", "bar_time": 0, "direction_probability": 0.7,
+             "profit_probability": 0.9, "dollar_volume": 500_000},
+            {"product": "LOW-USD", "bar_time": 0, "direction_probability": 0.99,
+             "profit_probability": 0.99, "dollar_volume": 100},
+        ]
+        quotes = {"BTC-USD": Quote(100, 100), "ETH-USD": Quote(49, 51)}
+        selected = select_shadow_entries(forecasts, quotes.get, 0.55, 2, 100_000, 50)
+        self.assertEqual([(strategy, row["product"]) for strategy, _, row, _ in selected],
+                         [("liquid", "BTC-USD"), ("direction", "BTC-USD")])
 
     def test_calibration_uses_later_hours_as_validation(self):
         with tempfile.TemporaryDirectory() as directory:

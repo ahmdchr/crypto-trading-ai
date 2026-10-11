@@ -50,6 +50,14 @@ Open the repository's **Actions** tab and wait for the manually triggered run to
 
 The workflow requests runs at minutes 17, 32, and 47 UTC each hour to give GitHub several chances to deliver a scheduled event. [GitHub warns](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows) that scheduled jobs can be delayed or dropped; check the Actions tab periodically. Its actual scans have been several hours apart, so the old direction strategy's one-hour training target did not match its position holding period. Keep observation mode enabled until a strategy is validated for the actual execution schedule. The bot's hourly cycle guard prevents duplicate scans within one hour, and duplicate runs do not commit a new wallet. The encrypted wallet is committed after each new cycle, so the repository's size will grow over time. Keep the password and a separate backup of the latest wallet.
 
+The workflow now records shadow entries from the quotes available during each
+scan and resolves them at the next scan with a valid exit quote. After at least
+two completed scans, decrypt the latest wallet and run
+`python3 cloud/compare_quotes.py --db PATH`. The report compares cash, liquid
+markets, direction scores, and profit scores on the same completed scans,
+including configured fees and slippage. It reports pending exits separately.
+This is a quote-based paper comparison, not a record of actual exchange fills.
+
 To compare the actual wallet against cash and inspect recorded one-hour forecasts
 against a liquid-market signal baseline,
 decrypt a wallet snapshot to a private local path and run

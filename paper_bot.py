@@ -27,6 +27,7 @@ LOGGER = logging.getLogger("paper_bot")
 class Quote:
     bid: float
     ask: float
+    observed_at: str | None = None
 
     @property
     def spread_bps(self):
@@ -91,10 +92,11 @@ class Exchange:
         tick_time = datetime.fromisoformat(ticker["time"].replace("Z", "+00:00"))
         if tick_time.tzinfo is None:
             raise ValueError(f"Ticker time has no timezone for {product}")
-        age = (datetime.now(timezone.utc) - tick_time).total_seconds()
+        observed_at = datetime.now(timezone.utc)
+        age = (observed_at - tick_time).total_seconds()
         if age < -30 or age > self.max_quote_age_seconds:
             raise ValueError(f"Stale ticker for {product}: {age:.0f}s old")
-        return Quote(bid, ask)
+        return Quote(bid, ask, observed_at.isoformat())
 
 
 def signal(bars: list[Bar], side_cost: float = 0.0025, target="profit"):
@@ -166,6 +168,21 @@ def connect(path: Path, starting_cash: float):
             execution_version TEXT NOT NULL DEFAULT 'last_trade_v1',
             model_version TEXT NOT NULL DEFAULT 'direction_v1'
         );
+        CREATE TABLE IF NOT EXISTS shadow_scans (
+            cycle_id INTEGER PRIMARY KEY, scan_time TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS shadow_entries (
+            cycle_id INTEGER NOT NULL, strategy TEXT NOT NULL,
+            product TEXT NOT NULL, rank INTEGER NOT NULL,
+            bar_time INTEGER NOT NULL, entry_time TEXT NOT NULL,
+            entry_bid REAL NOT NULL, entry_ask REAL NOT NULL,
+            spread_bps REAL NOT NULL, score REAL NOT NULL,
+            dollar_volume REAL NOT NULL, side_cost REAL NOT NULL,
+            exit_time TEXT, exit_bid REAL, net_return REAL,
+            PRIMARY KEY(cycle_id,strategy,product)
+        );
+        CREATE INDEX IF NOT EXISTS shadow_entries_pending
+            ON shadow_entries(product) WHERE exit_time IS NULL;
     """)
     columns = {row[1] for row in db.execute("PRAGMA table_info(paper_outcomes)")}
     if "execution_version" not in columns:
@@ -204,6 +221,29 @@ def trade(db, now: str, product: str, side: str, price: float, quantity: float,
                (now, product, side, price, quantity, fee, probability))
 
 
+def select_shadow_entries(forecasts, get_quote, threshold, max_positions,
+                          min_dollar_volume, max_spread_bps):
+    """Choose the same sized quote-eligible basket for each fixed benchmark."""
+    selected = []
+    eligible = [row for row in forecasts if row["dollar_volume"] >= min_dollar_volume]
+    for strategy, key in (("liquid", "dollar_volume"),
+                          ("direction", "direction_probability"),
+                          ("profit", "profit_probability")):
+        ranked = sorted(eligible, key=lambda row: (-row[key], row["product"]))
+        basket = []
+        for row in ranked:
+            if len(basket) >= max_positions:
+                break
+            if strategy != "liquid" and row[key] < threshold:
+                break
+            quote = get_quote(row["product"])
+            if quote is None or quote.spread_bps > max_spread_bps:
+                continue
+            basket.append((strategy, len(basket) + 1, row, quote))
+        selected.extend(basket)
+    return selected
+
+
 def cycle(exchange: Exchange, db, max_markets: int, max_positions: int,
           allocation: float, threshold: float, fee_bps: float,
           slippage_bps: float, min_dollar_volume: float, only_products=None,
@@ -230,6 +270,7 @@ def cycle(exchange: Exchange, db, max_markets: int, max_positions: int,
     candidates = []
     new_predictions = []
     new_direction_predictions = []
+    forecasts = []
     resolved_profit = []
     resolved_direction = []
     scanned = 0
@@ -276,6 +317,10 @@ def cycle(exchange: Exchange, db, max_markets: int, max_positions: int,
                                           direction_used, dollar_volume))
         new_predictions.append((product, bar_time, profit_probability,
                                 profit_used, dollar_volume, training_side_cost))
+        forecasts.append({"product": product, "bar_time": bar_time,
+                          "direction_probability": direction_used,
+                          "profit_probability": profit_used,
+                          "dollar_volume": dollar_volume})
         used_probability = direction_used if strategy == "direction" else profit_used
         if dollar_volume >= min_dollar_volume and used_probability >= threshold:
             candidates.append((used_probability, product))
@@ -285,11 +330,19 @@ def cycle(exchange: Exchange, db, max_markets: int, max_positions: int,
         candidates = []
     open_positions = list(db.execute("SELECT * FROM positions"))
     quotes = {}
+    failed_quotes = set()
+
+    def get_quote(product):
+        if product not in quotes and product not in failed_quotes:
+            try:
+                quotes[product] = exchange.quote(product)
+            except (RuntimeError, ValueError, KeyError) as error:
+                failed_quotes.add(product)
+                LOGGER.warning("No executable price for %s: %s", product, error)
+        return quotes.get(product)
+
     for product in sorted({row["product"] for row in open_positions}):
-        try:
-            quotes[product] = exchange.quote(product)
-        except (RuntimeError, ValueError, KeyError) as error:
-            LOGGER.warning("No executable price for %s: %s", product, error)
+        get_quote(product)
     held = {row["product"] for row in open_positions if row["product"] not in quotes}
     slots = max(0, max_positions - len(held))
     selected = []
@@ -298,22 +351,49 @@ def cycle(exchange: Exchange, db, max_markets: int, max_positions: int,
             break
         if product in held:
             continue
-        if product not in quotes:
-            try:
-                quotes[product] = exchange.quote(product)
-            except (RuntimeError, ValueError, KeyError) as error:
-                LOGGER.warning("No executable price for %s: %s", product, error)
-                continue
+        if get_quote(product) is None:
+            continue
         if quotes[product].spread_bps > max_spread_bps:
             LOGGER.info("Skipping %s: %.1f bps spread", product,
                         quotes[product].spread_bps)
             continue
         selected.append((probability, product))
+    shadow_entries = select_shadow_entries(
+        forecasts, get_quote, threshold, max_positions, min_dollar_volume,
+        max_spread_bps)
+    pending_shadow_products = {
+        row[0] for row in db.execute(
+            "SELECT DISTINCT product FROM shadow_entries WHERE exit_time IS NULL"
+        )
+    }
+    for product in sorted(pending_shadow_products):
+        get_quote(product)
     if not scanned:
         raise RuntimeError("No markets had usable candles; wallet was not changed")
     when = datetime.now(timezone.utc).isoformat()
     cost_rate = (fee_bps + slippage_bps) / 10_000
     with db:
+        for product in pending_shadow_products:
+            quote = quotes.get(product)
+            if quote is not None:
+                db.execute(
+                    "UPDATE shadow_entries SET exit_time=?,exit_bid=?,"
+                    "net_return=? * (1-side_cost) / (entry_ask*(1+side_cost)) - 1 "
+                    "WHERE product=? AND exit_time IS NULL AND cycle_id<?",
+                    (quote.observed_at or when, quote.bid, quote.bid, product, cycle_id),
+                )
+        db.execute("INSERT INTO shadow_scans(cycle_id,scan_time) VALUES (?,?)",
+                   (cycle_id, when))
+        db.executemany(
+            "INSERT INTO shadow_entries(cycle_id,strategy,product,rank,bar_time,"
+            "entry_time,entry_bid,entry_ask,spread_bps,score,dollar_volume,side_cost) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(cycle_id, strategy, row["product"], rank, row["bar_time"],
+              quote.observed_at or when, quote.bid, quote.ask, quote.spread_bps,
+              row["dollar_volume"] if strategy == "liquid" else
+              row[strategy + "_probability"], row["dollar_volume"], cost_rate)
+             for strategy, rank, row, quote in shadow_entries],
+        )
         for row in open_positions:
             product = row["product"]
             if product in quotes:

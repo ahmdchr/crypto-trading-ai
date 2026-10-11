@@ -26,7 +26,18 @@ pre-change encrypted wallet is preserved in `baselines/`.
 
 ## How it learns
 
-The bot retrains two separate logistic models for each usable pair from its latest completed hourly candles on every scan. The existing **direction** model still controls the paper wallet. A new **profit** model estimates whether the next candle's move would cover fees, slippage, and an assumed spread. It runs in shadow mode: it records forecasts and their later net candle returns without choosing wallet trades. This keeps the experiment separate while its performance is measured. `python3 status.py` reports both forecast streams and completed paper trade results.
+The bot retrains two separate logistic models for each usable pair from its latest completed hourly candles on every scan. The existing **direction** model controls the paper wallet when buying is enabled. A new **profit** model estimates whether the next candle's move would cover fees, slippage, and an assumed spread. It runs in shadow mode: it records forecasts and their later net candle returns without choosing wallet trades. This keeps the experiment separate while its performance is measured. `python3 status.py` reports both forecast streams and completed paper trade results.
+
+Each scan also records three quote-based shadow baskets: the highest-volume
+eligible markets, the strongest direction scores, and the strongest profit
+scores. Each selects up to five markets using the same liquidity, score, and
+spread checks as the paper bot. A shadow entry uses the public ask observed at
+the scan; its return is resolved at the next scan with a valid public bid and
+includes configured fees and slippage on both sides. These records are stored
+in the encrypted wallet and place no orders. Run
+`python3 cloud/compare_quotes.py --db PATH` on a decrypted wallet to compare
+mean returns on scans where all selected entries have resolved. Public quotes
+do not guarantee full fills or reflect order book depth.
 
 After at least 168 distinct hours and 1,000 resolved forecasts for the active strategy, the bot may adjust its scores with one calibration value. It fits that value on older hours, tests it on later hours, and uses it only if the later hours' Brier score improves by at least 2%. The adjustment is capped and stays inactive until those conditions are met. This changes score calibration, not the underlying strategy or risk limits. The profit model can control a separate experiment with `--strategy profit --db another-wallet.sqlite3`; the running service remains on `direction`. Keep evaluating net paper returns across different market periods before trusting it with real money.
 
