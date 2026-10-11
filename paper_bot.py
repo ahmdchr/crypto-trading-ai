@@ -207,7 +207,8 @@ def trade(db, now: str, product: str, side: str, price: float, quantity: float,
 def cycle(exchange: Exchange, db, max_markets: int, max_positions: int,
           allocation: float, threshold: float, fee_bps: float,
           slippage_bps: float, min_dollar_volume: float, only_products=None,
-          max_spread_bps=50, assumed_spread_bps=20, strategy="direction"):
+          max_spread_bps=50, assumed_spread_bps=20, strategy="direction",
+          observe_only=False):
     now = int(time.time())
     cycle_id = now // INTERVAL
     account = db.execute("SELECT * FROM account WHERE id=1").fetchone()
@@ -279,6 +280,9 @@ def cycle(exchange: Exchange, db, max_markets: int, max_positions: int,
         if dollar_volume >= min_dollar_volume and used_probability >= threshold:
             candidates.append((used_probability, product))
     candidates.sort(reverse=True)
+    candidate_count = len(candidates)
+    if observe_only:
+        candidates = []
     open_positions = list(db.execute("SELECT * FROM positions"))
     quotes = {}
     for product in sorted({row["product"] for row in open_positions}):
@@ -369,9 +373,9 @@ def cycle(exchange: Exchange, db, max_markets: int, max_positions: int,
         )
         db.execute("UPDATE account SET last_cycle=? WHERE id=1", (cycle_id,))
         db.execute("INSERT INTO cycles VALUES (?,?,?,?)",
-                   (when, scanned, len(candidates), equity))
+                   (when, scanned, candidate_count, equity))
     LOGGER.info("Scanned %d/%d USD markets; %d signals; equity $%.2f; cash $%.2f",
-                scanned, len(products), len(candidates), equity, cash)
+                scanned, len(products), candidate_count, equity, cash)
     LOGGER.info("Stored %d direction and profit forecasts; resolved %d profit and %d direction forecasts",
                 len(new_predictions), len(resolved_profit), len(resolved_direction))
     for row in db.execute("SELECT product,quantity,entry_price FROM positions"):
@@ -398,6 +402,8 @@ def main():
                         help="Historical spread estimate used only for training and backtesting")
     parser.add_argument("--max-quote-age-seconds", type=int, default=300)
     parser.add_argument("--once", action="store_true", help="Run one scan and exit")
+    parser.add_argument("--observe-only", action="store_true",
+                        help="Close existing paper positions and record forecasts without new buys")
     parser.add_argument("--quiet", action="store_true",
                         help="Log errors only; useful for public CI logs")
     args = parser.parse_args()
@@ -424,7 +430,8 @@ def main():
             cycle(exchange, db, args.max_markets, args.max_positions,
                   args.allocation, args.threshold, args.fee_bps,
                   args.slippage_bps, args.min_dollar_volume, only_products,
-                  args.max_spread_bps, args.assumed_spread_bps, args.strategy)
+                  args.max_spread_bps, args.assumed_spread_bps, args.strategy,
+                  args.observe_only)
         except (RuntimeError, urllib.error.URLError) as error:
             LOGGER.error("Cycle failed: %s", error)
             if args.once:

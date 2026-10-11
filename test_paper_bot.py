@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from learning import adjusted_probability, calibration_offset
+from cloud.compare_signals import replay
 from paper_bot import INTERVAL, Exchange, Quote, connect, cycle, signal
 from trader import Bar, net_bar_return
 
@@ -116,6 +117,30 @@ class PaperBotTests(unittest.TestCase):
                 "SELECT DISTINCT probability FROM profit_predictions"
             ).fetchone()[0], 0.1)
             db.close()
+
+    def test_observation_mode_closes_positions_and_keeps_forecasts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = connect(Path(directory) / "wallet.sqlite3", 1000)
+            with patch("paper_bot.time.time", return_value=1_800_000_000), \
+                 patch("paper_bot.signal", return_value=(0.8, 1_000_000, 1_799_996_400)):
+                cycle(FakeExchange(), db, 0, 2, 0.1, 0.55, 10, 5, 0)
+            with patch("paper_bot.time.time", return_value=1_800_003_600), \
+                 patch("paper_bot.signal", return_value=(0.8, 1_000_000, 1_800_000_000)):
+                cycle(FakeExchange(), db, 0, 2, 0.1, 0.55, 10, 5, 0,
+                      observe_only=True)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM positions").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM trades WHERE side='buy'").fetchone()[0], 2)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM trades WHERE side='sell'").fetchone()[0], 2)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM predictions").fetchone()[0], 4)
+            self.assertEqual(db.execute("SELECT candidates FROM cycles ORDER BY time DESC LIMIT 1").fetchone()[0], 2)
+            db.close()
+
+    def test_replay_uses_net_returns_and_cash_baseline(self):
+        hour = [{"direction_probability": 0.8, "profit_probability": 0.2,
+                 "dollar_volume": 1_000_000, "net_return": -0.01}]
+        self.assertEqual(replay([hour], "cash"), (0.0, 0))
+        self.assertEqual(replay([hour], "profit"), (0.0, 0))
+        self.assertAlmostEqual(replay([hour], "direction")[0], -0.001)
 
     def test_calibration_uses_later_hours_as_validation(self):
         with tempfile.TemporaryDirectory() as directory:

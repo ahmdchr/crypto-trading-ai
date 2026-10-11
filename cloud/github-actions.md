@@ -1,6 +1,6 @@
 # Run the paper bot on GitHub Actions without a payment card
 
-The [workflow](../.github/workflows/paper-trade.yml) runs one full Coinbase USD spot scan each hour on a standard GitHub runner. It decrypts the paper wallet, runs `paper_bot.py --once --quiet`, then encrypts and commits the updated wallet. The repository can be public because only the encrypted wallet is committed, and public workflow logs omit positions and balances. GitHub says standard runners are [free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). The bot still uses mock money and no exchange keys.
+The [workflow](../.github/workflows/paper-trade.yml) requests full Coinbase USD spot scans at three times each hour on a standard GitHub runner. It decrypts the paper wallet, runs `paper_bot.py --once --quiet --observe-only`, then encrypts and commits the updated wallet. Observation mode closes existing paper positions at the next successful scan and records new forecasts without buying. The repository can be public because only the encrypted wallet is committed, and public workflow logs omit positions and balances. GitHub says standard runners are [free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). The bot still uses mock money and no exchange keys.
 
 ## Set up the repository
 
@@ -48,4 +48,15 @@ gh workflow run paper-trade.yml
 
 Open the repository's **Actions** tab and wait for the manually triggered run to complete. If the local bot already scanned this hour, the workflow will report that the cycle is complete; check the next hourly run for a new scan and wallet commit. Then disable local automatic startup with `systemctl --user disable crypto-paper-bot.service`. If the run fails, leave the local bot stopped while investigating. Resume it only if you decide to abandon this cloud wallet, to avoid diverging histories.
 
-The workflow requests runs at minutes 17, 32, and 47 UTC each hour to give GitHub several chances to deliver a scheduled event. [GitHub warns](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows) that scheduled jobs can be delayed or dropped; check the Actions tab periodically. The bot's hourly cycle guard prevents duplicate scans within one hour, and duplicate runs do not commit a new wallet. The encrypted wallet is committed after each new cycle, so the repository's size will grow over time. Keep the password and a separate backup of the latest wallet.
+The workflow requests runs at minutes 17, 32, and 47 UTC each hour to give GitHub several chances to deliver a scheduled event. [GitHub warns](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows) that scheduled jobs can be delayed or dropped; check the Actions tab periodically. Its actual scans have been several hours apart, so the old direction strategy's one-hour training target did not match its position holding period. Keep observation mode enabled until a strategy is validated for the actual execution schedule. The bot's hourly cycle guard prevents duplicate scans within one hour, and duplicate runs do not commit a new wallet. The encrypted wallet is committed after each new cycle, so the repository's size will grow over time. Keep the password and a separate backup of the latest wallet.
+
+To compare the actual wallet against cash and inspect recorded one-hour forecasts
+against a liquid-market signal baseline,
+decrypt a wallet snapshot to a private local path and run
+`python3 cloud/compare_signals.py --db PATH`. The script splits observed forecast
+hours chronologically and uses the stored next-candle returns after estimated
+fees, slippage, and spread. The signal diagnostic assumes entry at the next
+candle open, which could precede the actual delayed scan. It does not reproduce
+the GitHub scan gaps or ticker fills, so its returns cannot stand in for a live
+paper account. The actual-wallet comparison uses the bot's marked equity and
+captures its scan gaps and recorded costs.
